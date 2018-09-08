@@ -45,6 +45,8 @@
 
 #![no_std]
 #![warn(missing_docs)]
+#![cfg_attr(feature = "i128", recursion_limit = "130")]
+#![cfg_attr(not(feature = "i128"), recursion_limit = "66")]
 #![cfg_attr(feature = "strict", deny(missing_docs))]
 #![cfg_attr(feature = "strict", deny(warnings))]
 #![cfg_attr(feature = "cargo-clippy", deny(clippy))]
@@ -133,4 +135,149 @@ macro_rules! assert_type {
     ($a:ty) => {
         let _: <$a as $crate::Same<True>>::Output;
     };
+}
+
+/// Implement `From/Into` to allow conversion between compile-time and runtime integers.
+/// Sometimes we must implement `Into` directly to avoid coherence issues.
+mod impl_from {
+    use consts::*;
+    use ::{Unsigned, NonZero, UTerm, UInt, Bit, Integer, PInt, NInt};
+    use type_operators::*;
+    use operator_aliases::*;
+
+    #[test]
+    fn into_u16() {
+        type U16Max = Sub1<U65536>;
+        let p: u16 = U16Max::new().into();
+        let u: u16 = PInt::<U16Max>::new().into();
+
+        assert_eq!(p, ::core::u16::MAX);
+        assert_eq!(u, ::core::u16::MAX);
+    }
+
+    #[test]
+    fn into_i16() {
+        type I16Max = Sub1<U32768>;
+        let u: i16 = I16Max::new().into();
+        let p: i16 = PInt::<I16Max>::new().into();
+        let n: i16 = N32768::new().into();
+
+        assert_eq!(u, ::core::i16::MAX);
+        assert_eq!(p, ::core::i16::MAX);
+        assert_eq!(n, ::core::i16::MIN);
+    }
+
+    macro_rules! impl_from {
+        (
+            $(
+                $(#[$meta:meta])*
+                $S:ident :: $sfn:ident (), $U:ident :: $ufn:ident () => $bits:ty
+             );* $(;)*
+        ) => {
+            $(
+                // UInt
+
+                $(#[$meta])*
+                impl From<UTerm> for $U {
+                    fn from(_: UTerm) -> $U {
+                        0
+                    }
+                }
+
+                $(#[$meta])*
+                impl From<UTerm> for $S {
+                    fn from(_: UTerm) -> $S {
+                        0
+                    }
+                }
+
+                $(#[$meta])*
+                impl<U, B> Into<$U> for UInt<U, B>
+                    where U: Unsigned,
+                          B: Bit,
+                          UInt<U, B>: IsLess<Shleft<U1, $bits>, Output=True>,
+                {
+                    fn into(self) -> $U {
+                        UInt::<U, B>::$ufn()
+                    }
+                }
+
+                $(#[$meta])*
+                impl<U, B> Into<$S> for UInt<U, B>
+                    where U: Unsigned,
+                          B: Bit,
+                          UInt<U, B>: IsLess<Shleft<U1, Sub1<$bits>>, Output=True>,
+                {
+                    fn into(self) -> $S {
+                        UInt::<U, B>::$sfn()
+                    }
+                }
+
+                // PInt/NInt
+
+                $(#[$meta])*
+                impl From<Z0> for $U {
+                    fn from(_: Z0) -> $U {
+                        0
+                    }
+                }
+
+                $(#[$meta])*
+                impl From<Z0> for $S {
+                    fn from(_: Z0) -> $S {
+                        0
+                    }
+                }
+
+                $(#[$meta])*
+                impl<U> Into<$U> for PInt<U>
+                    where U: Unsigned +
+                             NonZero +
+                             IsLess<Shleft<U1, $bits>, Output=True>,
+                {
+                    fn into(self) -> $U {
+                        U::$ufn()
+                    }
+                }
+
+                $(#[$meta])*
+                impl<U> Into<$S> for PInt<U>
+                    where U: Unsigned +
+                             NonZero +
+                             IsLess<Shleft<U1, Sub1<$bits>>, Output=True>,
+                {
+                    fn into(self) -> $S {
+                        PInt::<U>::$sfn()
+                    }
+                }
+
+                $(#[$meta])*
+                impl<U> Into<$S> for NInt<U>
+                    where U: Unsigned +
+                             NonZero +
+                             IsLessOrEqual<Shleft<U1, Sub1<$bits>>, Output=True>,
+                {
+                    fn into(self) -> $S {
+                        NInt::<U>::$sfn()
+                    }
+                }
+             )*
+        };
+    }
+
+    impl_from! {
+        #[cfg(feature = "i128")]
+        i128::to_i128(), u128::to_u128() => U128;
+        i64::to_i64(),   u64::to_u64()   => U64;
+        i32::to_i32(),   u32::to_u32()   => U32;
+        i16::to_i16(),   u16::to_u16()   => U16;
+        i8::to_i8(),     u8::to_u8()     => U8;
+
+        #[cfg(target_pointer_width = "16")]
+        isize::to_isize(), usize::to_usize() => U16;
+        #[cfg(target_pointer_width = "32")]
+        isize::to_isize(), usize::to_usize() => U32;
+        #[cfg(target_pointer_width = "64")]
+        isize::to_isize(), usize::to_usize() => U64;
+    }
 }
